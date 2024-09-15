@@ -1,0 +1,40 @@
+[tasks.clean_cargo]
+command = "cargo"
+args = ["clean"]
+
+[tasks.clean]
+dependencies = ["clean_cargo"]
+
+[tasks.compile-release]
+command = "cargo"
+args = ["build", "--release"]
+
+[tasks.copy-release]
+command = "cp"
+args = ["target/release/metafuzz", "./metafuzz"]
+
+[tasks.compile-debug]
+command = "cargo"
+args = ["build"]
+
+[tasks.copy-debug]
+command = "cp"
+args = ["target/debug/metafuzz", "./metafuzz-debug"]
+
+[tasks.build-metafuzz-clean]
+dependencies = [ "clean", "compile-release", "copy-release"]
+
+[tasks.build-metafuzz]
+dependencies = [ "compile-release", "copy-release" ]
+
+[tasks.debug-clean]
+dependencies = [ "clean", "compile-debug", "copy-debug"]
+
+[tasks.debug]
+dependencies = [ "compile-debug", "copy-debug" ]
+
+[tasks.run]
+command = "./metafuzz"
+args = ["--contract-glob", "../demo/*" ]
+dependencies = ["build-metafuzz"]
+

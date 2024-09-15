@@ -1,0 +1,101 @@
+[package]
+name = "ityfuzz"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dev-dependencies]
+criterion = "0.4.0"
+
+[features]
+default = [
+    "flashloan_v2",
+    "force_cache",
+    "cmp",
+    "dataflow",
+    "evm",
+    "print_txn_corpus",
+    "real_block_env",
+    "real_balance",
+    "full_trace",
+    "attacker_is_caller"
+]
+evm = []
+cmp = []
+dataflow = []
+evaluation = []
+ondisk_corpus = []
+# need to turn off when running DV contracts
+deployer_is_attacker = []
+print_infant_corpus = []
+print_txn_corpus = []
+fuzz_static = []
+flashloan_v2 = []
+real_balance = []
+full_trace = []
+force_cache = []
+use_presets = []
+print_logs = []
+z3_debug = []
+debug = []
+flashloan_debug = []
+real_block_env = []
+attacker_is_caller = []
+
+[dependencies]
+bytes = { version = "1.2.1", features = ["serde"] }
+retry = "2.0.0"
+serde_cbor = "0.11.2"
+clap = { version = "4.4.4", features = ["derive"] }
+rlp = "0.5.2"
+ethers = "2.0.7"
+
+hex = "0.4"
+primitive-types = { version = "0.12.1", features = ["rlp", "serde"] }
+libafl = "0.11.1"
+libafl_bolts = "0.11.1"
+rand = "0.8.5"
+nix = "0.24"
+serde = "1.0.147"
+serde_traitobject = "0.2.7"
+serde_json = "1.0.73"
+z3 = { version = "0.11.2", features = ["static-link-z3"] }
+z3-sys = "0.7.1"
+glob = "0.3.0"
+rust-crypto = "0.2"
+itertools = "0.10.2"
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+once_cell = "1.8.0"
+permutator = "0.4.3"
+either = "1.8.0"
+regex = "1"
+typetag = "0.2.13"
+lazy_static = "1.4.0"
+
+revm = { git = "https://github.com/fuzzland/revm", rev = "91f3a4cc2762d0b45ab88f48faa6a7c39fa84f84", features = [
+    "no_gas_measuring",
+    "serde",
+    "memory_limit",
+] }
+revm-primitives = { git = "https://github.com/fuzzland/revm", rev = "91f3a4cc2762d0b45ab88f48faa6a7c39fa84f84", features = [
+    "no_gas_measuring",
+    "serde",
+    "memory_limit",
+] }
+revm-interpreter = { git = "https://github.com/fuzzland/revm", rev = "91f3a4cc2762d0b45ab88f48faa6a7c39fa84f84", features = [
+    "no_gas_measuring",
+    "serde",
+    "memory_limit",
+] }
+# external fuzzing-based abi decompiler
+heimdall_core = { git = "https://github.com/fuzzland/heimdall-rs.git", package = "heimdall-core" }
+# heimdall_core relies on an async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# template engine
+handlebars = "4.4"
+
+# logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+colored = "2.0"

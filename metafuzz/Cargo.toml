@@ -1,0 +1,28 @@
+[package]
+name = "metafuzz"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ityfuzz = {path = "../", version = "0.1.0"}
+clap = {version = "4.0.18", features = ["derive"]}
+primitive-types = { version = "0.12.1", features = ["rlp", "serde"] }
+reqwest = "0.11.6"
+serde_json = "1.0.73"
+serde = "1.0.147"
+rlp = "0.5.2"
+hex = "0.4"
+ethers = "2.0.7"
+
+bytes = { version = "1.2.1", features = ["serde"] }
+revm-primitives = { git = "https://github.com/fuzzland/revm", rev = "91f3a4cc2762d0b45ab88f48faa6a7c39fa84f84", features = [
+    "no_gas_measuring",
+    "serde",
+    "memory_limit",
+] }
+
+# logging
+tracing = "0.1"
+tracing-subscriber = "0.3"

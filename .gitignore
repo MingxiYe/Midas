@@ -1,0 +1,15 @@
+/target
+/Cargo.lock
+/tmp
+/solutions
+/*bench
+bin
+corpus
+.vscode
+node_modules
+
+*.abi
+*.bin
+.env
+cache
+work_dir

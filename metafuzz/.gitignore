@@ -1,0 +1,15 @@
+target
+Cargo.lock
+cli
+solutions
+corpus
+log*
+
+cache
+.z3-trace
+work_dir
+
+dataset.txt
+onchain_test.py
+.env
+dataset_w_txn.txt
