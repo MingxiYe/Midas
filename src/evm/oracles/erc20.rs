@@ -1,0 +1,258 @@
+use std::{cell::RefCell, collections::HashMap, ops::Deref, rc::Rc};
+
+use bytes::Bytes;
+use revm_primitives::{Bytecode, HashSet};
+
+use crate::{
+    evm::{
+        input::{ConciseEVMInput, EVMInput, EVMInputT},
+        onchain::flashloan::CAN_LIQUIDATE,
+        oracle::EVMBugResult,
+        oracles::{u512_div_float, ERC20_BUG_IDX},
+        producers::erc20::ERC20Producer,
+        types::{EVMAddress, EVMFuzzState, EVMOracleCtx, EVMU256, EVMU512},
+        uniswap::TokenContextT,
+        vm::EVMState,
+    },
+    generic_vm::vm_state::VMStateT,
+    oracle::Oracle,
+    state::{HasCaller, HasExecutionResult},
+};
+
+pub struct IERC20OracleFlashloan {
+    pub balance_of: Vec<u8>,
+    pub known_tokens: HashMap<EVMAddress, Rc<RefCell<dyn TokenContextT<EVMFuzzState>>>>,
+    pub known_pair_reserve_slot: HashMap<EVMAddress, EVMU256>,
+    pub erc20_producer: Rc<RefCell<ERC20Producer>>,
+    pub nft_tokens: HashSet<EVMAddress>,
+}
+
+impl IERC20OracleFlashloan {
+    pub fn new(erc20_producer: Rc<RefCell<ERC20Producer>>) -> Self {
+        Self {
+            balance_of: hex::decode("70a08231").unwrap(),
+            known_tokens: HashMap::new(),
+            known_pair_reserve_slot: HashMap::new(),
+            erc20_producer,
+            nft_tokens: Default::default(),
+        }
+    }
+
+    pub fn register_token(
+        &mut self,
+        token: EVMAddress,
+        token_ctx: Rc<RefCell<dyn TokenContextT<EVMFuzzState>>>,
+        can_liquidate: bool,
+    ) {
+        // setting can_liquidate to true to turn on liquidation
+        unsafe {
+            CAN_LIQUIDATE |= can_liquidate;
+        }
+        self.known_tokens.insert(token, token_ctx);
+    }
+
+    pub fn register_pair_reserve_slot(&mut self, pair: EVMAddress, slot: EVMU256) {
+        self.known_pair_reserve_slot.insert(pair, slot);
+    }
+
+    pub fn register_nft(
+        &mut self,
+        nft: EVMAddress,
+    ) {
+        self.nft_tokens.insert(nft);
+    }
+}
+
+impl
+    Oracle<
+        EVMState,
+        EVMAddress,
+        Bytecode,
+        Bytes,
+        EVMAddress,
+        EVMU256,
+        Vec<u8>,
+        EVMInput,
+        EVMFuzzState,
+        ConciseEVMInput,
+    > for IERC20OracleFlashloan
+{
+    fn transition(&self, _ctx: &mut EVMOracleCtx<'_>, _stage: u64) -> u64 {
+        0
+    }
+
+    fn oracle(&self, ctx: &mut EVMOracleCtx<'_>, _stage: u64) -> Vec<u64> {
+        // debug!("Oracle: {:?}", ctx.input.get_randomness());
+        let liquidation_percent = ctx.input.get_liquidation_percent();
+        let mut nft_earned = None;
+        if liquidation_percent > 0 {
+            // debug!("Liquidation percent: {}", liquidation_percent);
+            let liquidation_percent = EVMU256::from(liquidation_percent);
+            let mut liquidations_earned = Vec::new();
+
+            for ((caller, token), (new_balance, _new_balance_txn)) in
+                self.erc20_producer.deref().borrow().balances.iter()
+            {
+                let is_caller = ctx.fuzz_state.has_caller(caller);
+                if self.nft_tokens.contains(token) {
+                    if is_caller && *new_balance > EVMU256::ZERO {
+                        nft_earned = Some((*token, *new_balance));
+                    }
+                    continue;
+                }
+
+                if *new_balance > EVMU256::ZERO && is_caller {
+                    let token_info = self.known_tokens.get(token).expect("Token not found");
+                    let liq_amount = *new_balance * liquidation_percent / EVMU256::from(10);
+                    liquidations_earned.push((*caller, token_info, liq_amount));
+                }
+            }
+
+            let _path_idx = ctx.input.get_randomness()[0] as usize;
+
+            let mut liquidation_txs = vec![];
+            let mut swap_infos = vec![];
+
+            for (caller, token_info, _amount) in liquidations_earned {
+                let txs = token_info.borrow().sell(
+                    ctx.fuzz_state,
+                    _amount,
+                    ctx.fuzz_state.callers_pool[0],
+                    ctx.input.get_randomness().as_slice(),
+                );
+
+                liquidation_txs.extend(
+                    txs.iter()
+                        .map(|(addr, abi, _)| (caller, *addr, Bytes::from(abi.get_bytes()))),
+                );
+
+                if let Some(swap_info) = txs.last() {
+                    swap_infos.push(swap_info.clone());
+                }
+            }
+
+            let (_out, mut state) = ctx.call_post_batch_dyn(&liquidation_txs);
+
+            let is_reverted = _out.iter().any(|(_, is_success)| *is_success == false);
+            if !is_reverted {
+                // Record the swap info for generating foundry in the future.
+                state.swap_data = ctx
+                    .fuzz_state
+                    .get_execution_result()
+                    .new_state
+                    .state
+                    .swap_data
+                    .clone();
+                for (target, mut abi, _) in swap_infos {
+                    state.swap_data.push(&target, &mut abi);
+                }
+                ctx.fuzz_state.get_execution_result_mut().new_state.state = state;
+            }
+        }
+
+        let exec_res = ctx.fuzz_state.get_execution_result_mut();
+        exec_res
+            .new_state
+            .state
+            .flashloan_data
+            .oracle_recheck_balance
+            .clear();
+        exec_res
+            .new_state
+            .state
+            .flashloan_data
+            .oracle_recheck_reserve
+            .clear();
+
+        if exec_res.new_state.state.has_post_execution() {
+            return vec![];
+        }
+
+        if exec_res.new_state.state.flashloan_data.earned
+            > exec_res.new_state.state.flashloan_data.owed
+            + EVMU512::from(10_000_000_000_000_000_000_000_u128)
+            // > 0.01ETH
+        {
+            let net = exec_res.new_state.state.flashloan_data.earned
+                - exec_res.new_state.state.flashloan_data.owed;
+            // we scaled by 1e24, so divide by 1e24 to get ETH
+            let net_eth = u512_div_float(net, EVMU512::from(1_000_000_000_000_000_000_000_u128), 3);
+
+            EVMBugResult::new_simple(
+                "Fund Loss".to_string(),
+                ERC20_BUG_IDX,
+                format!(
+                    "Anyone can earn {} ETH by interacting with the provided contracts\n",
+                    net_eth,
+                ),
+                ConciseEVMInput::from_input(ctx.input, ctx.fuzz_state.get_execution_result()),
+            )
+            .push_to_output();
+            return vec![ERC20_BUG_IDX];
+        } else if nft_earned.is_some() && exec_res.new_state.state.flashloan_data.owed == EVMU512::ZERO {
+            let (token, amount) = nft_earned.unwrap();
+            EVMBugResult::new_simple(
+                "Fund Loss".to_string(),
+                ERC20_BUG_IDX,
+                format!(
+                    "Anyone can earn {} NFT by interacting with the provided contracts {}\n",
+                    amount,
+                    token,
+                ),
+                ConciseEVMInput::from_input(ctx.input, ctx.fuzz_state.get_execution_result()),
+            )
+            .push_to_output();
+            return vec![ERC20_BUG_IDX];
+        }
+
+        let mut liquidations_owed = Vec::new();
+        let mut is_fund_loss = false;
+        for ((caller, token), (new_balance, new_balance_txn)) in 
+            self.erc20_producer.deref().borrow().balances.iter()
+        {
+            let is_caller = ctx.fuzz_state.has_caller(caller);
+            if !is_caller && *new_balance < *new_balance_txn && *new_balance == EVMU256::from(0) {
+                let liq_amount = *new_balance_txn - *new_balance;
+                liquidations_owed.push((*caller, *token, liq_amount));
+                is_fund_loss = true;
+            } else if !is_caller && *new_balance < *new_balance_txn && self.nft_tokens.contains(token) {
+                let liq_amount = *new_balance_txn - *new_balance;
+                liquidations_owed.push((*caller, *token, liq_amount));
+                is_fund_loss = true;
+            }
+        }
+
+        if is_fund_loss {
+            let mut bug_info = String::new();
+            for (caller, token, amount) in liquidations_owed {
+                if self.nft_tokens.contains(&token) {
+                    bug_info = format!(
+                        "{}The caller {} loss {} amount of the {} NFT token\n",
+                        bug_info,
+                        caller,
+                        amount,
+                        token
+                    )
+                } else {
+                    bug_info = format!(
+                        "{}The caller {} loss {} amount of {} token\n",
+                        bug_info,
+                        caller,
+                        amount,
+                        token
+                    )
+                }
+            }
+            EVMBugResult::new_simple(
+                "Fund Loss".to_string(), 
+                ERC20_BUG_IDX, 
+                bug_info, 
+                ConciseEVMInput::from_input(ctx.input, ctx.fuzz_state.get_execution_result()),
+            )
+            .push_to_output();
+            vec![ERC20_BUG_IDX]
+        } else {
+            vec![]
+        }
+    }
+}
